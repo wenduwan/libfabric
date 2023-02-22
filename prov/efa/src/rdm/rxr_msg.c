@@ -45,6 +45,8 @@
 
 #include "rxr_tp.h"
 
+int prev_rtm_type = -1;
+
 /**
  * This file define the msg ops functions.
  * It is consisted of the following sections:
@@ -111,8 +113,7 @@ int rxr_msg_select_rtm(struct rxr_ep *rxr_ep, struct rxr_op_entry *tx_entry, int
 		 * Have the remote side issue a read to copy the data instead
 		 * to work around this issue.
 		 */
-		if (tx_entry->total_len > rxr_env.shm_max_medium_size ||
-		   (tx_entry->total_len > 0 && efa_mr_is_hmem(tx_entry->desc[0])))
+		if (tx_entry->total_len >= rxr_env.shm_max_medium_size)
 			return RXR_LONGREAD_MSGRTM_PKT + tagged;
 
 		return RXR_EAGER_MSGRTM_PKT + tagged;
@@ -174,6 +175,12 @@ ssize_t rxr_msg_post_rtm(struct rxr_ep *ep, struct rxr_op_entry *tx_entry, int u
 	assert(peer);
 
 	rtm_type = rxr_msg_select_rtm(ep, tx_entry, use_p2p);
+	if (prev_rtm_type != rtm_type) {
+		EFA_WARN(FI_LOG_CQ,
+			"tx_entry->total_len: %lu\tSwitched RTM type: %d -> %d\n", tx_entry->total_len, prev_rtm_type, rtm_type);
+		prev_rtm_type = rtm_type;
+	}
+
 	assert(rtm_type >= RXR_REQ_PKT_BEGIN);
 
 	if (peer->is_local && ep->use_shm_for_tx) {

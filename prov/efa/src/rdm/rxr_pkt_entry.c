@@ -345,6 +345,51 @@ void rxr_pkt_entry_append(struct rxr_pkt_entry *dst,
 }
 
 /**
+ * @brief Send a packet to SHM endpoint.
+ * 
+ * @param[in]	ep			rxr_ep ptr
+ * @param[in]	pkt_entry	rxr_pkt_entry to send
+ * @param[in]	shm_addr	SHM endpoint fi_addr_t	
+ * @return		return code of `fi_sendv` call
+ */
+static inline int rxr_pkt_entry_send_to_shm(struct rxr_ep *ep, struct rxr_pkt_entry *pkt_entry, fi_addr_t shm_addr) {
+	struct efa_mr *efa_mr = NULL;
+	struct ofi_mr *fi_mr = NULL;
+	struct rxr_pkt_sendv *send = pkt_entry->send;
+
+	assert(pkt_entry->alloc_type == RXR_PKT_FROM_SHM_TX_POOL);
+
+	/**
+	 * SHM provider expects `struct ofi_mr **desc` data type in `fi_sendv(..., void **desc, ...)`, 
+	 * whereas EFA provider internally uses `struct efa_mr`, hence the type conversion.
+	 */
+	for (int i = 0; i < send->iov_count; i++) {
+		efa_mr = (struct efa_mr *)send->desc[i];
+		if (efa_mr && efa_mr->shm_mr) {
+			fi_mr = (struct ofi_mr *)fi_mr_desc(efa_mr->shm_mr);
+			/**
+			 * For cuda MR there is a special case when gdrcopy is used.
+			 * 
+			 * When EFA domain registers the memory, the `device` attribute is set to
+			 * the cuda device id, e.g. 0, 1, ..., cuda_device_count - 1. When SHM does
+			 * HMEM copy with the cuda device id, cudaMemcpy will be used. This is not
+			 * performant for small data sizes.
+			 * This can be improved if EFA registers the memory using gdrcopy, in which case
+			 * efa_mr->peer.device.cuda stores the gdrcopy memory handle(a large number) instead.
+			 * Since SHM also supports gdrcopy, we explicitly pass through the memory handle
+			 * so that gdrcopy is used to achieve better performance for small data sizes.
+			 */
+			if (efa_mr->peer.iface == FI_HMEM_CUDA) {
+				fi_mr->device = efa_mr->peer.device.cuda;
+			}
+			send->desc[i] = (void *)fi_mr;
+		}
+	}
+
+	return fi_sendv(ep->shm_ep, send->iov, (void **)&send->desc, send->iov_count, shm_addr, pkt_entry);
+}
+
+/**
  * @brief Populate pkt_entry->ibv_send_wr with the information stored in pkt_entry,
  * and send it out
  *
@@ -394,7 +439,7 @@ ssize_t rxr_pkt_entry_send(struct rxr_ep *ep, struct rxr_pkt_entry *pkt_entry,
 #endif
 
 	if (pkt_entry->alloc_type == RXR_PKT_FROM_SHM_TX_POOL) {
-		ret = fi_sendv(ep->shm_ep, send->iov, NULL, send->iov_count, peer->shm_fiaddr, pkt_entry);
+		ret = rxr_pkt_entry_send_to_shm(ep, pkt_entry, peer->shm_fiaddr);
 		goto out;
 	}
 

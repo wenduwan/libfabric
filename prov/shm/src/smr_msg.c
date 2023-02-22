@@ -282,6 +282,7 @@ static ssize_t smr_srx_recv(struct fid_ep *ep_fid, void *buf, size_t len, void *
 				&srx->unexp_msg_queue);
 }
 
+int prev_proto = -1;
 static ssize_t smr_generic_sendmsg(struct smr_ep *ep, const struct iovec *iov,
 				   void **desc, size_t iov_count, fi_addr_t addr,
 				   uint64_t tag, uint64_t data, void *context,
@@ -328,6 +329,11 @@ static ssize_t smr_generic_sendmsg(struct smr_ep *ep, const struct iovec *iov,
 	}
 	proto = smr_select_proto(use_ipc, smr_cma_enabled(ep, peer_smr), op,
 				 total_len, op_flags);
+	if (prev_proto != proto) {
+		FI_WARN(&smr_prov, FI_LOG_EP_CTRL,
+			"use_ipc: %d\tiov_count: %lu\ttotal_len: %lu\tswitch proto: %d -> %d\n", use_ipc, iov_count, total_len, prev_proto, proto);
+		prev_proto = proto;
+	}
 
 	ret = smr_proto_ops[proto](ep, peer_smr, id, peer_id, op, tag, data, op_flags,
 				   (struct ofi_mr **)desc, iov, iov_count, total_len,

@@ -144,7 +144,8 @@ int rxr_pkt_init_data_from_op_entry(struct rxr_ep *ep,
 		}
 	} else {
 		/* When using shm, shm can access host memory without registration */
-		iov_accessible_by_device = !iov_mr || iov_mr->peer.iface == FI_HMEM_SYSTEM;
+		// iov_accessible_by_device = iov_mr->peer.iface == FI_HMEM_SYSTEM;
+		iov_accessible_by_device = true;
 	}
 
 	/*
