@@ -70,6 +70,7 @@ static int efa_domain_hmem_info_init_protocol_thresholds(struct efa_domain *efa_
 		info->max_medium_msg_size = EFA_DEFAULT_INTER_MAX_MEDIUM_MESSAGE_SIZE;
 		info->min_read_msg_size = EFA_DEFAULT_INTER_MIN_READ_MESSAGE_SIZE;
 		info->min_read_write_size = EFA_DEFAULT_INTER_MIN_READ_WRITE_SIZE;
+		info->max_gdrcopy_size = EFA_DEFAULT_MAX_GDRCOPY_SIZE;
 		fi_param_get_size_t(&efa_prov, "runt_size", &info->runt_size);
 		fi_param_get_size_t(&efa_prov, "inter_max_medium_message_size", &info->max_medium_msg_size);
 		fi_param_get_size_t(&efa_prov, "inter_min_read_message_size", &info->min_read_msg_size);
@@ -81,6 +82,7 @@ static int efa_domain_hmem_info_init_protocol_thresholds(struct efa_domain *efa_
 		info->max_medium_msg_size = 0;
 		info->min_read_msg_size = efa_max_eager_msg_size_with_largest_header(efa_domain) + 1;
 		info->min_read_write_size = efa_max_eager_msg_size_with_largest_header(efa_domain) + 1;
+		info->max_gdrcopy_size = EFA_DEFAULT_MAX_GDRCOPY_SIZE;
 		fi_param_get_size_t(&efa_prov, "runt_size", &info->runt_size);
 		fi_param_get_size_t(&efa_prov, "inter_min_read_message_size", &info->min_read_msg_size);
 		fi_param_get_size_t(&efa_prov, "inter_min_read_write_size", &info->min_read_write_size);

@@ -397,7 +397,6 @@ struct rxr_op_entry *rxr_ep_alloc_tx_entry(struct rxr_ep *rxr_ep,
 	return tx_entry;
 }
 
-
 /**
  * @brief convert EFA descriptors to shm descriptors.
  *
@@ -419,6 +418,47 @@ void rxr_convert_desc_for_shm(int numdesc, void **desc)
 		efa_mr = desc[i];
 		if (efa_mr)
 			desc[i] = fi_mr_desc(efa_mr->shm_mr);
+	}
+}
+
+/**
+ * @brief Convert EFA MR descriptors to shm descriptors and override device memory handle.
+ *
+ * This function is derived from `rxr_convert_desc_for_shm`.
+ * In addition to converting the MR descriptor type, this function also overrides the device
+ * memory handle consumed by the SHM endpoint.
+ *
+ * The current use case is to enforce gdrcopy for small messages in SHM. Because the gdrcopy
+ * memory handle is only available in `struct efa_mr`, we have to override the device memory
+ * handle before passing it to SHM.
+ *
+ * TODO: Consider enhancing SHM/HMEM to encapsulate the memory handle selection logic
+ *
+ * @param[in]		numdesc		number of descriptors in the array
+ * @param[in,out]	desc		descriptors input is EFA descriptor, output
+ *								is shm descriptor.
+ */
+void rxr_convert_desc_and_override_mh_for_shm(struct iovec *iov, int iov_count, void **desc)
+{
+	struct efa_mr *efa_mr = NULL;
+	struct ofi_mr *ofi_mr = NULL;
+	struct gdrcopy_handle *gdrcopy = NULL;
+
+	for (int i = 0; i < iov_count; ++i) {
+		efa_mr = desc[i];
+		if (efa_mr && efa_mr->shm_mr) {
+			ofi_mr = fi_mr_desc(efa_mr->shm_mr);
+			assert(ofi_mr->iface == efa_mr->peer.iface);
+			if (efa_mr->peer.iface == FI_HMEM_CUDA &&
+				ofi_mr->device != efa_mr->peer.device.reserved) {
+					gdrcopy = efa_mr->peer.device.reserved;
+					gdrcopy
+					iov[i].iov_len <= efa_mr->domain->hmem_info->max_gdrcopy_size; 
+					ofi_mr->device = efa_mr->peer.device.reserved;
+				}
+			}
+			desc[i] = (void *)ofi_mr;
+		}
 	}
 }
 

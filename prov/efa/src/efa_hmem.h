@@ -57,6 +57,7 @@ struct efa_hmem_info {
 	size_t runt_size;
 	size_t min_read_msg_size;
 	size_t min_read_write_size;
+	size_t max_gdrcopy_size;
 };
 
 int efa_domain_hmem_validate_p2p_opt(struct efa_domain *efa_domain, enum fi_hmem_iface iface, int p2p_opt);

@@ -394,7 +394,22 @@ ssize_t rxr_pkt_entry_send(struct rxr_ep *ep, struct rxr_pkt_entry *pkt_entry,
 #endif
 
 	if (pkt_entry->alloc_type == RXR_PKT_FROM_SHM_TX_POOL) {
-		ret = fi_sendv(ep->shm_ep, send->iov, NULL, send->iov_count, peer->shm_fiaddr, pkt_entry);
+		rxr_convert_desc_and_override_mh_for_shm(send->iov, send->iov_count, send->desc);
+		/*
+		 * Convert the mr descriptor (struct efa_mr **) to (struct ofi_mr **) expected by shm
+		 * There are 2 scenarios:
+		 * 1. The data 
+		 */
+		// EFA_WARN(FI_LOG_EP_CTRL, "Packet type: %d\n", rxr_get_base_hdr(pkt_entry->wiredata)->type);
+		// rxr_convert_desc_for_shm(send->iov_count, send->desc);
+		// if (rxr_get_base_hdr(pkt_entry->wiredata)->type < RXR_EXTRA_REQ_PKT_BEGIN &&
+		// 	rxr_get_base_hdr(pkt_entry->wiredata)->type >= RXR_REQ_PKT_BEGIN) {
+		// 	EFA_WARN(FI_LOG_EP_CTRL, "Overriding device handle\n");
+		// 	rxr_convert_desc_and_override_mh_for_shm(send->iov, send->iov_count, send->desc);
+		// } else {
+		// 	rxr_convert_desc_for_shm(send->iov_count, send->desc);
+		// }
+		ret = fi_sendv(ep->shm_ep, send->iov, (void **)&send->desc, send->iov_count, peer->shm_fiaddr, pkt_entry);
 		goto out;
 	}
 

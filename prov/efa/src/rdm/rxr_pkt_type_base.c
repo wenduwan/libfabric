@@ -142,9 +142,9 @@ int rxr_pkt_init_data_from_op_entry(struct rxr_ep *ep,
 		} else {
 			iov_accessible_by_device = false;
 		}
-	} else {
-		/* When using shm, shm can access host memory without registration */
-		iov_accessible_by_device = !iov_mr || iov_mr->peer.iface == FI_HMEM_SYSTEM;
+	} else if (ep->use_shm_for_tx) {
+		/* SHM cannot access SynapseAI or Neuron HMEM */
+		iov_accessible_by_device = !iov_mr || (iov_mr->peer.iface != FI_HMEM_SYNAPSEAI && iov_mr->peer.iface != FI_HMEM_NEURON);
 	}
 
 	/*
