@@ -501,7 +501,17 @@ struct ibv_mr *efa_mr_reg_ibv_dmabuf_mr(struct ibv_pd *pd, uint64_t offset,
 #endif
 /**
  * @brief Register a memory buffer with rdma-core api.
- *
+ * On the first function call, it attempts to determine
+ * if the memory region can be registered via dmabuf if
+ * the HMEM interface allows dmabuf. If registration with
+ * dmabuf fails, it will fallback to without dmabuf.
+ * Once dmabuf support status is determined, subsequent
+ * calls will deterministically route to either register
+ * with or without dmabuf, without fallback.
+ * 
+ * If the caller requires FI_MR_DMABUF, the function will
+ * always use dmabuf to register the memory.
+ * 
  * @param efa_mr the ptr to the efa_mr object
  * @param mr_attr the ptr to the fi_mr_attr object
  * @param access the desired memory protection attributes
@@ -511,76 +521,68 @@ struct ibv_mr *efa_mr_reg_ibv_dmabuf_mr(struct ibv_pd *pd, uint64_t offset,
 static struct ibv_mr *efa_mr_reg_ibv_mr(struct efa_mr *efa_mr, struct fi_mr_attr *mr_attr,
 					int access, const uint64_t flags)
 {
-	if (flags & FI_MR_DMABUF)
-		return efa_mr_reg_ibv_dmabuf_mr(
-			efa_mr->domain->ibv_pd,
-			mr_attr->dmabuf->offset,
-			mr_attr->dmabuf->len,
-			(uintptr_t) mr_attr->dmabuf->base_addr + mr_attr->dmabuf->offset,
-			mr_attr->dmabuf->fd,
-			access
-		);
+	int ret, dmabuf_fd;
+	struct ibv_mr *mr = NULL;
+	uint64_t iova, offset;
+	size_t len;
+	enum efa_dmabuf_support_status *dmabuf_support;
 
-	/*
-	 * TODO: remove the synapseai and neuron blocks by onboarding the
-	 * ofi_hmem_get_dmabuf_fd API.
-	 */
-#if HAVE_SYNAPSEAI
-	if (efa_mr_is_synapseai(efa_mr)) {
-		int dmabuf_fd;
-		uint64_t offset;
-		int ret;
+	dmabuf_support = &(efa_mr->domain->hmem_info[mr_attr->iface].dmabuf_support_status);
 
-		ret = synapseai_get_dmabuf_fd(mr_attr->mr_iov->iov_base,
-						(uint64_t) mr_attr->mr_iov->iov_len,
-						&dmabuf_fd, &offset);
+	if (flags & FI_MR_DMABUF) {
+		goto dmabuf;
+	}
+
+	if (*dmabuf_support == EFA_DMABUF_NOT_SUPPORTED) {
+		goto no_dmabuf;
+	}
+dmabuf:
+	if (flags & FI_MR_DMABUF) {
+		dmabuf_fd = mr_attr->dmabuf->fd;
+		offset = mr_attr->dmabuf->offset;
+		iova = (uintptr_t) mr_attr->dmabuf->base_addr +
+		       mr_attr->dmabuf->offset;
+		len = mr_attr->dmabuf->len;
+	} else {
+		iova = (uint64_t) mr_attr->mr_iov->iov_base,
+		len = mr_attr->mr_iov->iov_len;
+		ret = ofi_hmem_get_dmabuf_fd(mr_attr->iface, (void *)iova, len,
+		                             &dmabuf_fd, &offset);
+
 		if (ret != FI_SUCCESS) {
-			EFA_WARN(FI_LOG_MR, "Unable to get dmabuf fd for Gaudi device buffer \n");
-			return NULL;
+			EFA_WARN(FI_LOG_MR,
+				 "Unable to get dmabuf fd for device buffer. "
+				 "iface: %s errno: %d, err_msg: %s\n",
+				 fi_tostr(&mr_attr->iface, FI_TYPE_HMEM_IFACE),
+				 ret, fi_strerror(-ret));
+			goto fallback;
 		}
-		return efa_mr_reg_ibv_dmabuf_mr(efa_mr->domain->ibv_pd, offset,
-					mr_attr->mr_iov->iov_len,
-					(uint64_t)mr_attr->mr_iov->iov_base,
-					dmabuf_fd, access);
 	}
-#endif
 
-#if HAVE_NEURON
-	if (efa_mr_is_neuron(efa_mr)) {
-		int dmabuf_fd;
-		uint64_t offset;
-		int ret;
+	EFA_INFO(FI_LOG_MR,
+		 "Registering dmabuf mr with fd: %d, offset: %lu, len: %zu\n",
+		 dmabuf_fd, offset, len);
 
-		ret = neuron_get_dmabuf_fd(
-				mr_attr->mr_iov->iov_base,
-				mr_attr->mr_iov->iov_len,
-				&dmabuf_fd,
-				&offset);
+	mr = efa_mr_reg_ibv_dmabuf_mr(efa_mr->domain->ibv_pd, offset, len, iova,
+				      dmabuf_fd, access);
 
-		if (ret == FI_SUCCESS) {
-			/* Success => invoke ibv_reg_dmabuf_mr */
-			return efa_mr_reg_ibv_dmabuf_mr(
-					efa_mr->domain->ibv_pd, 0,
-					mr_attr->mr_iov->iov_len,
-					(uint64_t)mr_attr->mr_iov->iov_base,
-					dmabuf_fd, access);
-		} else if (ret == -FI_ENOPROTOOPT) {
-			/* Protocol not availabe => fallback */
-			EFA_INFO(FI_LOG_MR,
-				"Unable to get dmabuf fd for Neuron device buffer, "
-				"Fall back to ibv_reg_mr\n");
-			return ibv_reg_mr(
-				efa_mr->domain->ibv_pd,
-				(void *)mr_attr->mr_iov->iov_base,
-				mr_attr->mr_iov->iov_len, access);
-		}
-		return NULL;
+fallback:
+	if (*dmabuf_support == EFA_DMABUF_UNINITIALIZED) {
+		*dmabuf_support = mr == NULL ? EFA_DMABUF_NOT_SUPPORTED :
+		                               EFA_DMABUF_SUPPORTED;
 	}
-#endif
 
-	return ibv_reg_mr(efa_mr->domain->ibv_pd,
-			(void *)mr_attr->mr_iov->iov_base,
+	if (flags & FI_MR_DMABUF || *dmabuf_support == EFA_DMABUF_SUPPORTED) {
+		goto out;
+	}
+
+	EFA_INFO(FI_LOG_MR, "Disable dmabuf support for HMEM interface.\n");
+no_dmabuf:
+	mr = ibv_reg_mr(efa_mr->domain->ibv_pd,
+			(void *) mr_attr->mr_iov->iov_base,
 			mr_attr->mr_iov->iov_len, access);
+out:
+	return mr;
 }
 
 #if HAVE_CUDA
